@@ -1,0 +1,242 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from 'firebase/firestore';
+import { Save, FileText, Download, Upload, CheckCircle, FileCode, Printer, Info, BookOpen } from 'lucide-react';
+
+// --- Firebase 配置 ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'mechanical-project-editor';
+
+const ProjectEditor = () => {
+  const [user, setUser] = useState(null);
+  const [content, setContent] = useState({
+    title: "114學年度機械群專題製作報告",
+    abstract: "請輸入摘要內容...",
+    introduction: "壹、前言\n1.1 研究動機\n1.2 研究目的",
+    theory: "貳、作品原理與理論探討",
+    process: "參、研究過程與製作步驟",
+    results: "肆、結果與討論",
+    conclusion: "伍、結論與建議",
+    references: "參考文獻"
+  });
+  const [saveStatus, setSaveStatus] = useState('');
+  const fileInputRef = useRef(null);
+
+  // 1. 初始化驗證
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (err) {
+        console.error("Auth failed", err);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. 讀取數據
+  useEffect(() => {
+    if (!user) return;
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'projects', 'main');
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setContent(docSnap.data().content);
+      }
+    }, (err) => console.error("Firestore read error:", err));
+    return () => unsubscribe();
+  }, [user]);
+
+  // 3. 儲存數據至資料庫
+  const handleSave = async () => {
+    if (!user) return;
+    setSaveStatus('同步中...');
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'projects', 'main');
+      await setDoc(docRef, {
+        content,
+        updatedAt: new Date().toISOString(),
+      });
+      setSaveStatus('同步成功');
+      setTimeout(() => setSaveStatus(''), 2000);
+    } catch (err) {
+      setSaveStatus('同步失敗');
+    }
+  };
+
+  const exportToJson = () => {
+    const dataStr = JSON.stringify(content, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    const exportFileDefaultName = `${content.title}_備份.json`;
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+  };
+
+  const importFromJson = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const json = JSON.parse(e.target.result);
+        setContent(json);
+        setSaveStatus('匯入成功！');
+      } catch (err) {
+        setSaveStatus('匯入格式錯誤');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const updateField = (field, value) => {
+    setContent(prev => ({ ...prev, [field]: value }));
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-6 print:p-0 print:bg-white font-sans text-slate-900">
+      {/* 頂部控制列 */}
+      <div className="max-w-6xl mx-auto mb-6 flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-xl shadow-sm sticky top-0 z-10 print:hidden border border-slate-200">
+        <div>
+          <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <FileCode className="text-blue-600" /> 114機械群專題編輯器
+          </h1>
+          <p className="text-xs text-slate-500">符合 13pt 標楷體規範・支援完整資訊輸入</p>
+        </div>
+        
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={handleSave} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-slate-700 transition-all shadow-sm">
+            <Save size={16} /> 同步
+          </button>
+          
+          <button onClick={exportToJson} title="下載 JSON 檔案以備份至 Google Drive" className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition-all shadow-sm">
+            <Download size={16} /> 匯出備份
+          </button>
+
+          <button onClick={() => fileInputRef.current.click()} title="讀取從 Google Drive 下載的備份檔案" className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm hover:bg-slate-50 transition-all shadow-sm">
+            <Upload size={16} /> 讀取備份
+          </button>
+          
+          <button onClick={handlePrint} className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-emerald-700 transition-all shadow-sm">
+            <Printer size={16} /> 列印/PDF
+          </button>
+
+          <input type="file" ref={fileInputRef} onChange={importFromJson} className="hidden" accept=".json" />
+          <span className="text-xs text-slate-400 ml-2">{saveStatus}</span>
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto flex flex-col lg:flex-row gap-8 items-start">
+        {/* 左側 A4 編輯區域 */}
+        <div className="w-full lg:w-[210mm] bg-white shadow-xl print:shadow-none border border-slate-100 print:border-none p-[31.7mm] pt-[25.4mm] pb-[25.4mm] min-h-[297mm] relative overflow-hidden" 
+             style={{ 
+               fontFamily: '"BiauKai", "標楷體", STKaiti, serif',
+               lineHeight: '1.2' 
+             }}>
+          
+          <textarea
+            value={content.title}
+            onChange={(e) => updateField('title', e.target.value)}
+            className="w-full text-center font-bold mb-16 border-none focus:ring-0 resize-none overflow-hidden bg-transparent leading-tight"
+            style={{ fontSize: '20pt' }}
+            rows={2}
+          />
+
+          <div className="mb-10 text-justify">
+            <h2 className="text-center font-bold mb-6" style={{ fontSize: '16pt' }}>摘 要</h2>
+            <textarea
+              value={content.abstract}
+              onChange={(e) => updateField('abstract', e.target.value)}
+              className="w-full border-none focus:ring-0 resize-none p-0 text-justify bg-transparent overflow-hidden"
+              style={{ fontSize: '13pt', minHeight: '120px' }}
+            />
+          </div>
+
+          {[
+            { key: 'introduction', label: '壹、前言' },
+            { key: 'theory', label: '貳、作品原理與理論探討' },
+            { key: 'process', label: '參、研究過程與製作步驟' },
+            { key: 'results', label: '肆、結果與討論' },
+            { key: 'conclusion', label: '伍、結論與建議' },
+            { key: 'references', label: '參考文獻' }
+          ].map((item) => (
+            <div key={item.key} className="mb-8">
+              <h2 className="font-bold mb-4" style={{ fontSize: '16pt' }}>{item.label}</h2>
+               <textarea
+                value={content[item.key]}
+                onChange={(e) => updateField(item.key, e.target.value)}
+                className="w-full border-none focus:ring-0 resize-none p-0 text-justify bg-transparent overflow-hidden"
+                style={{ fontSize: '13pt' }}
+                rows={8}
+              />
+            </div>
+          ))}
+
+          <div className="absolute bottom-10 left-0 w-full text-center text-[10pt] font-serif print:block">
+            - 1 -
+          </div>
+        </div>
+
+        {/* 右側說明欄 */}
+        <div className="w-full lg:w-80 space-y-6 print:hidden">
+          {/* 使用說明 */}
+          <section className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+            <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4 border-b pb-2">
+              <BookOpen size={18} className="text-blue-600" /> 使用說明
+            </h3>
+            <div className="space-y-4 text-sm text-slate-600">
+              <div className="flex gap-3">
+                <div className="bg-blue-100 text-blue-600 w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">1</div>
+                <p>現在您可以自由輸入校名、姓名與指導老師資訊，系統不會再進行匿名檢核。</p>
+              </div>
+              <div className="flex gap-3">
+                <div className="bg-blue-100 text-blue-600 w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">2</div>
+                <p>點擊「同步」會將資料暫存在線上，下次開啟自動載入。</p>
+              </div>
+              <div className="flex gap-3">
+                <div className="bg-blue-100 text-blue-600 w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">3</div>
+                <p>點擊「匯出備份」下載備份檔，手動上傳至 Google Drive 永久保存。</p>
+              </div>
+            </div>
+          </section>
+
+          {/* 規範提醒 */}
+          <section className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+            <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4 border-b pb-2">
+              <Info size={18} className="text-emerald-600" /> 排版規範重點
+            </h3>
+            <ul className="space-y-2 text-xs text-slate-500">
+              <li className="flex justify-between"><span>內文字級</span><span className="font-mono font-bold text-slate-700">13pt</span></li>
+              <li className="flex justify-between"><span>標題字級</span><span className="font-mono font-bold text-slate-700">16pt</span></li>
+              <li className="flex justify-between"><span>左、右邊距</span><span className="font-mono font-bold text-slate-700">3.17cm</span></li>
+              <li className="flex justify-between"><span>上、下邊距</span><span className="font-mono font-bold text-slate-700">2.54cm</span></li>
+              <li className="flex justify-between"><span>主要字體</span><span className="font-bold text-slate-700">標楷體</span></li>
+            </ul>
+          </section>
+
+          {/* 列印說明 */}
+          <section className="bg-slate-800 p-5 rounded-xl text-white">
+            <h3 className="font-bold flex items-center gap-2 mb-2 text-sm">
+              <Printer size={16} /> 如何存為 PDF？
+            </h3>
+            <p className="text-[11px] opacity-80 leading-relaxed">
+              點擊「列印」後，在目的地選擇「另存為 PDF」。請確保「背景圖形」選項開啟，以維持版面完整。
+            </p>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ProjectEditor;
